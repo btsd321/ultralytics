@@ -20,6 +20,7 @@ from ultralytics.utils import ROOT, YAML
 
 
 class YOLO(Model):
+    # 我想修改这里
     """
     YOLO (You Only Look Once) object detection model.
 
