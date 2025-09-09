@@ -717,6 +717,121 @@ class BaseTrainer:
         t = time.time() - self.train_time_start
         with open(self.csv, "a", encoding="utf-8") as f:
             f.write(s + ("%.6g," * n % tuple([self.epoch + 1, t] + vals)).rstrip(",") + "\n")
+        
+        # Save per-class metrics if validator has detailed metrics
+        if hasattr(self, 'validator') and self.validator is not None:
+            self.save_per_class_metrics(t)
+
+    def save_per_class_metrics(self, t):
+        """Save per-class metrics to separate CSV files."""
+        if not hasattr(self.validator, 'metrics') or self.validator.metrics is None:
+            return
+            
+        validator_metrics = self.validator.metrics
+        
+        # Check if we have class-wise metrics available
+        if hasattr(validator_metrics, 'ap_class_index') and len(validator_metrics.ap_class_index) > 0:
+            # Create per-class results CSV
+            per_class_csv = self.save_dir / "results_per_class.csv"
+            
+            # Prepare class-wise data
+            class_data = []
+            for i in range(len(validator_metrics.ap_class_index)):
+                class_idx = validator_metrics.ap_class_index[i]
+                class_name = self.data.get("names", {}).get(class_idx, f"class_{class_idx}")
+                
+                # Get class-specific results
+                precision, recall, ap50, ap = validator_metrics.class_result(i)
+                
+                class_row = {
+                    "epoch": self.epoch + 1,
+                    "time": t,
+                    "class_id": class_idx,
+                    "class_name": class_name,
+                    "precision": precision,
+                    "recall": recall,
+                    "mAP50": ap50,
+                    "mAP50-95": ap,
+                    "instances": validator_metrics.nt_per_class[class_idx] if hasattr(validator_metrics, 'nt_per_class') else 0,
+                    "images": validator_metrics.nt_per_image[class_idx] if hasattr(validator_metrics, 'nt_per_image') else 0,
+                }
+                
+                # Add F1 score if available
+                if hasattr(validator_metrics, 'box') and hasattr(validator_metrics.box, 'f1') and i < len(validator_metrics.box.f1):
+                    class_row["f1"] = validator_metrics.box.f1[i]
+                
+                # Add segmentation metrics if available (for segmentation tasks)
+                if hasattr(validator_metrics, 'seg') and validator_metrics.seg is not None:
+                    seg_precision, seg_recall, seg_ap50, seg_ap = validator_metrics.seg.class_result(i)
+                    class_row.update({
+                        "seg_precision": seg_precision,
+                        "seg_recall": seg_recall,
+                        "seg_mAP50": seg_ap50,
+                        "seg_mAP50-95": seg_ap,
+                    })
+                    if hasattr(validator_metrics.seg, 'f1') and i < len(validator_metrics.seg.f1):
+                        class_row["seg_f1"] = validator_metrics.seg.f1[i]
+                
+                class_data.append(class_row)
+            
+            # Write header if file doesn't exist
+            if not per_class_csv.exists() and class_data:
+                headers = list(class_data[0].keys())
+                with open(per_class_csv, "w", encoding="utf-8") as f:
+                    f.write(",".join(headers) + "\n")
+            
+            # Write class data
+            if class_data:
+                with open(per_class_csv, "a", encoding="utf-8") as f:
+                    for class_row in class_data:
+                        vals = [str(class_row[k]) for k in class_row.keys()]
+                        f.write(",".join(vals) + "\n")
+            
+            # Also save a summary at the end of training
+            if self.epoch + 1 >= self.epochs:  # Last epoch
+                self.save_final_class_summary()
+
+    def save_final_class_summary(self):
+        """Save final per-class metrics summary."""
+        if not hasattr(self.validator, 'metrics') or self.validator.metrics is None:
+            return
+            
+        validator_metrics = self.validator.metrics
+        
+        # Check if summary method is available
+        if hasattr(validator_metrics, 'summary'):
+            try:
+                summary_data = validator_metrics.summary()
+                
+                # Save detailed summary to JSON and CSV
+                summary_csv = self.save_dir / "class_summary.csv"
+                summary_json = self.save_dir / "class_summary.json"
+                
+                # Save as CSV
+                if summary_data:
+                    import pandas as pd
+                    try:
+                        df = pd.DataFrame(summary_data)
+                        df.to_csv(summary_csv, index=False)
+                        LOGGER.info(f"Per-class summary saved to {summary_csv}")
+                    except ImportError:
+                        # Fallback if pandas not available
+                        with open(summary_csv, "w", encoding="utf-8") as f:
+                            if summary_data:
+                                headers = list(summary_data[0].keys())
+                                f.write(",".join(headers) + "\n")
+                                for row in summary_data:
+                                    vals = [str(row[k]) for k in headers]
+                                    f.write(",".join(vals) + "\n")
+                
+                # Save as JSON
+                import json
+                with open(summary_json, "w", encoding="utf-8") as f:
+                    json.dump(summary_data, f, indent=2)
+                    LOGGER.info(f"Per-class summary saved to {summary_json}")
+                    
+            except Exception as e:
+                LOGGER.warning(f"Failed to save class summary: {e}")
 
     def plot_metrics(self):
         """Plot and display metrics visually."""
