@@ -41,9 +41,6 @@ def download_common_weights():
 
         # YOLOv8 OBB模型
         "yolov8n-obb.pt", "yolov8s-obb.pt", "yolov8m-obb.pt", "yolov8l-obb.pt", "yolov8x-obb.pt",
-        
-        # 其他常用模型
-        "sam_b.pt", "sam_l.pt", "FastSAM-x.pt", "FastSAM-s.pt",
     ]
     
     print(f"开始下载权重文件到: {weights_dir}")
