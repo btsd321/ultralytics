@@ -9,14 +9,16 @@ from ultralytics.utils import LOGGER
 
 # 保存原始函数的引用
 _original_attempt_download_asset = None
+_original_check_amp = None
 
 def disable_downloads():
     """禁用所有下载功能"""
-    global _original_attempt_download_asset
+    global _original_attempt_download_asset, _original_check_amp
     
     # 导入需要修改的模块
     from ultralytics.utils import downloads
     from ultralytics.nn import tasks
+    from ultralytics.utils import checks
     
     # 保存原始函数
     if _original_attempt_download_asset is None:
@@ -73,15 +75,53 @@ def disable_downloads():
             f"  4. 使用 YAML 配置文件从头开始训练"
         )
     
+    # 保存并替换 check_amp 函数
+    if _original_check_amp is None:
+        _original_check_amp = checks.check_amp
+    
+    def no_download_check_amp(model):
+        """离线版本的AMP检查 - 跳过下载直接返回结果"""
+        device = next(model.parameters()).device if hasattr(model, 'parameters') and any(model.parameters()) else None
+        
+        if device is None:
+            LOGGER.warning("🚫 AMP检查跳过: 无法获取模型设备")
+            return False
+            
+        if device.type in {"cpu", "mps"}:
+            LOGGER.info("🚫 AMP检查跳过: AMP仅在CUDA设备上使用")
+            return False  # AMP only used on CUDA devices
+        
+        # 检查GPU是否有已知的AMP问题
+        try:
+            import torch
+            import re
+            gpu = torch.cuda.get_device_name(device)
+            pattern = re.compile(
+                r"(nvidia|geforce|quadro|tesla).*?(1660|1650|1630|t400|t550|t600|t1000|t1200|t2000|k40m)", 
+                re.IGNORECASE
+            )
+            
+            if bool(pattern.search(gpu)):
+                LOGGER.warning(f"🚫 AMP检查: {gpu} GPU可能导致AMP问题，建议禁用AMP")
+                return False
+        except Exception as e:
+            LOGGER.warning(f"🚫 AMP GPU检查失败: {e}")
+        
+        # 在离线模式下，假设AMP工作正常（避免下载模型进行测试）
+        LOGGER.info("✅ AMP检查跳过下载测试 - 离线模式假设AMP可用")
+        LOGGER.info("💡 如果训练中遇到NaN loss或zero-mAP，请设置 amp=False")
+        return True
+    
     # 替换函数
     downloads.attempt_download_asset = no_download_attempt_download_asset
     tasks.attempt_download_asset = no_download_attempt_download_asset
+    checks.check_amp = no_download_check_amp
     
-    LOGGER.info("🚫 已启用离线模式 - 禁用所有自动下载")
+    LOGGER.info("🚫 已启用离线模式 - 禁用所有自动下载和AMP检查下载")
 
 def enable_downloads():
     """重新启用下载功能"""
-    global _original_attempt_download_asset
+    global _original_attempt_download_asset, _original_check_amp
     
     if _original_attempt_download_asset is not None:
         from ultralytics.utils import downloads
@@ -90,7 +130,11 @@ def enable_downloads():
         downloads.attempt_download_asset = _original_attempt_download_asset
         tasks.attempt_download_asset = _original_attempt_download_asset
         
-        LOGGER.info("✅ 已恢复下载功能")
+    if _original_check_amp is not None:
+        from ultralytics.utils import checks
+        checks.check_amp = _original_check_amp
+        
+    LOGGER.info("✅ 已恢复下载功能和AMP检查")
 
 # 自动启用离线模式
 disable_downloads()
