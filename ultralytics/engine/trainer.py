@@ -835,6 +835,10 @@ class BaseTrainer:
                         # Per-class training losses not available, use placeholder values
                         # This handles cases where validation detects classes not present in training batch
                         LOGGER.warning(f"Per-class training losses not available for class index {class_idx}, using placeholder values (1000.0).")
+                        if self.enable_per_class_loss is False:
+                            LOGGER.warning("Enable 'enable_per_class_loss' to True in Trainer to compute per-class losses during validation.")
+                        if not hasattr(self, 'per_class_losses_epoch'):
+                            LOGGER.warning("Per-class losses for the epoch not computed, ensure model criterion supports it.")
                         
                         # Use fixed placeholder values to indicate missing per-class data
                         placeholder_losses = {
@@ -882,6 +886,10 @@ class BaseTrainer:
                         # Per-class validation losses not available, use placeholder values
                         # This handles cases where validation detects classes not present in validation batch
                         LOGGER.warning(f"Per-class validation losses not available for class index {class_idx}, using placeholder values (1000.0).")
+                        if self.enable_per_class_loss is False:
+                            LOGGER.warning("Enable 'enable_per_class_loss' to True in Trainer to compute per-class losses during validation.")
+                        if not hasattr(self.validator, 'per_class_losses_val'):
+                            LOGGER.warning("Per-class validation losses not computed, ensure validator supports it.")
                         
                         # Use fixed placeholder values to indicate missing per-class validation data
                         placeholder_val_losses = {
