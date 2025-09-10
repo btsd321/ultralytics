@@ -123,6 +123,10 @@ class BaseValidator:
             self.args.conf = 0.01 if self.args.task == "obb" else 0.001  # reduce OBB val memory usage
         self.args.imgsz = check_imgsz(self.args.imgsz, max_dim=1)
 
+        # Per-class loss tracking for validation
+        self.enable_per_class_loss = getattr(self.args, 'per_class_loss', False)
+        self.per_class_losses_val = {}
+
         self.plots = {}
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
 
@@ -189,6 +193,14 @@ class BaseValidator:
             model.warmup(imgsz=(1 if pt else self.args.batch, self.data["channels"], imgsz, imgsz))  # warmup
 
         self.run_callbacks("on_val_start")
+        
+        # Reset per-class validation losses at start
+        if self.enable_per_class_loss:
+            self.per_class_losses_val = {}
+            # Reset per-class losses in model criterion for validation
+            if hasattr(model, 'criterion') and hasattr(model.criterion, 'reset_per_class_losses'):
+                model.criterion.reset_per_class_losses()
+        
         dt = (
             Profile(device=self.device),
             Profile(device=self.device),
@@ -212,7 +224,27 @@ class BaseValidator:
             # Loss
             with dt[2]:
                 if self.training:
-                    self.loss += model.loss(batch, preds)[1]
+                    batch_loss_tuple = model.loss(batch, preds)
+                    self.loss += batch_loss_tuple[1]
+                    
+                    # Collect per-class validation losses
+                    if (self.enable_per_class_loss and hasattr(model, 'criterion') and 
+                        hasattr(model.criterion, 'get_per_class_losses')):
+                        batch_per_class_losses = model.criterion.get_per_class_losses()
+                        for class_id, losses in batch_per_class_losses.items():
+                            if class_id not in self.per_class_losses_val:
+                                self.per_class_losses_val[class_id] = {
+                                    'box_loss': 0.0, 'cls_loss': 0.0, 'dfl_loss': 0.0, 'count': 0
+                                }
+                                # Add seg_loss for segmentation tasks
+                                if hasattr(model.criterion, 'overlap'):  # Check if it's segmentation loss
+                                    self.per_class_losses_val[class_id]['seg_loss'] = 0.0
+                            
+                            # Accumulate losses
+                            for loss_type, loss_val in losses.items():
+                                if loss_type in self.per_class_losses_val[class_id]:
+                                    self.per_class_losses_val[class_id][loss_type] += loss_val
+                            self.per_class_losses_val[class_id]['count'] += 1
 
             # Postprocess
             with dt[3]:

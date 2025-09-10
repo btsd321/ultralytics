@@ -166,6 +166,10 @@ class BaseTrainer:
         self.loss_names = ["Loss"]
         self.csv = self.save_dir / "results.csv"
         self.plot_idx = [0, 1, 2]
+        
+        # Per-class loss tracking
+        self.enable_per_class_loss = getattr(self.args, 'per_class_loss', False)
+        self.per_class_losses_epoch = {}
 
         # HUB
         self.hub_session = None
@@ -385,6 +389,10 @@ class BaseTrainer:
                 LOGGER.info(self.progress_string())
                 pbar = TQDM(enumerate(self.train_loader), total=nb)
             self.tloss = None
+            
+            # Reset per-class losses for this epoch
+            if self.enable_per_class_loss and hasattr(self.model, 'criterion') and hasattr(self.model.criterion, 'reset_per_class_losses'):
+                self.model.criterion.reset_per_class_losses()
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")
                 # Warmup
@@ -458,7 +466,17 @@ class BaseTrainer:
                 if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
                     self._clear_memory(threshold=0.5)  # prevent VRAM spike
                     self.metrics, self.fitness = self.validate()
-                self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
+                
+                # Collect per-class losses
+                if self.enable_per_class_loss and hasattr(self.model, 'criterion') and hasattr(self.model.criterion, 'get_per_class_losses'):
+                    self.per_class_losses_epoch = self.model.criterion.get_per_class_losses()
+                
+                # Prepare metrics with per-class losses included
+                epoch_metrics = {**self.label_loss_items(self.tloss), **self.metrics, **self.lr}
+                if self.enable_per_class_loss:
+                    epoch_metrics.update(self._format_per_class_losses())
+                
+                self.save_metrics(metrics=epoch_metrics)
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                 if self.args.time:
                     self.stop |= (time.time() - self.train_time_start) > (self.args.time * 3600)
@@ -633,6 +651,11 @@ class BaseTrainer:
         elif isinstance(self.args.pretrained, (str, Path)):
             weights, _ = attempt_load_one_weight(self.args.pretrained)
         self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
+        
+        # Enable per-class loss tracking if requested
+        if self.enable_per_class_loss and hasattr(self.model, 'criterion'):
+            self.model.criterion.enable_per_class_loss = True
+            
         return ckpt
 
     def optimizer_step(self):
@@ -786,35 +809,115 @@ class BaseTrainer:
                     except (ValueError, TypeError):
                         precision = recall = ap50 = ap = 0.0
                     
+                    # Build class row based on available metrics
                     class_row = {
                         "epoch": self.epoch + 1,
                         "time": round(float(t), 4),
                         "class_id": int(class_idx),
-                        # Training losses (from metrics parameter)
-                        "train/box_loss": float(metrics.get("train/box_loss", 0.0)) if metrics else 0.0,
-                        "train/seg_loss": float(metrics.get("train/seg_loss", 0.0)) if metrics else 0.0,
-                        "train/cls_loss": float(metrics.get("train/cls_loss", 0.0)) if metrics else 0.0,
-                        "train/dfl_loss": float(metrics.get("train/dfl_loss", 0.0)) if metrics else 0.0,
-                        # Box metrics (B)
+                    }
+                    
+                    # Add per-class training losses if available, otherwise use overall losses
+                    if (self.enable_per_class_loss and hasattr(self, 'per_class_losses_epoch') 
+                        and int(class_idx) in self.per_class_losses_epoch):
+                        # Use actual per-class losses calculated during training
+                        per_class_losses = self.per_class_losses_epoch[int(class_idx)]
+                        class_row.update({
+                            "train/box_loss": float(per_class_losses.get("box_loss", 0.0)),
+                            "train/cls_loss": float(per_class_losses.get("cls_loss", 0.0)),
+                            "train/dfl_loss": float(per_class_losses.get("dfl_loss", 0.0)),
+                        })
+                        # Add seg_loss if it exists in per-class losses
+                        if "seg_loss" in per_class_losses:
+                            class_row["train/seg_loss"] = float(per_class_losses.get("seg_loss", 0.0))
+                        elif hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
+                            class_row["train/seg_loss"] = 0.0
+                    else:
+                        # Fallback to overall losses if per-class losses not available
+                        if metrics:
+                            class_row.update({
+                                "train/box_loss": float(metrics.get("train/box_loss", 0.0)),
+                                "train/cls_loss": float(metrics.get("train/cls_loss", 0.0)),
+                                "train/dfl_loss": float(metrics.get("train/dfl_loss", 0.0)),
+                            })
+                            # Add seg_loss only if it exists (segmentation tasks)
+                            if "train/seg_loss" in metrics:
+                                class_row["train/seg_loss"] = float(metrics.get("train/seg_loss", 0.0))
+                        else:
+                            class_row.update({
+                                "train/box_loss": 0.0,
+                                "train/cls_loss": 0.0,
+                                "train/dfl_loss": 0.0,
+                            })
+                            # Check if we have loss_names to determine if seg_loss should be included
+                            if hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
+                                class_row["train/seg_loss"] = 0.0
+                    
+                    # Add box metrics
+                    class_row.update({
                         "metrics/precision(B)": precision,
                         "metrics/recall(B)": recall,
                         "metrics/mAP50(B)": ap50,
                         "metrics/mAP50-95(B)": ap,
-                        # Segmentation metrics (M) - will be 0.0 for non-segmentation tasks
+                    })
+                    
+                    # Add segmentation metrics placeholder (will be updated later if available)
+                    class_row.update({
                         "metrics/precision(M)": 0.0,
                         "metrics/recall(M)": 0.0,
                         "metrics/mAP50(M)": 0.0,
                         "metrics/mAP50-95(M)": 0.0,
-                        # Validation losses (from metrics parameter)
-                        "val/box_loss": float(metrics.get("val/box_loss", 0.0)) if metrics else 0.0,
-                        "val/seg_loss": float(metrics.get("val/seg_loss", 0.0)) if metrics else 0.0,
-                        "val/cls_loss": float(metrics.get("val/cls_loss", 0.0)) if metrics else 0.0,
-                        "val/dfl_loss": float(metrics.get("val/dfl_loss", 0.0)) if metrics else 0.0,
-                        # Learning rates (from metrics parameter)
-                        "lr/pg0": float(metrics.get("lr/pg0", 0.0)) if metrics else 0.0,
-                        "lr/pg1": float(metrics.get("lr/pg1", 0.0)) if metrics else 0.0,
-                        "lr/pg2": float(metrics.get("lr/pg2", 0.0)) if metrics else 0.0,
-                    }
+                    })
+                    
+                    # Add per-class validation losses if available, otherwise use overall validation losses
+                    if (self.enable_per_class_loss and hasattr(self.validator, 'per_class_losses_val') and
+                        int(class_idx) in self.validator.per_class_losses_val):
+                        # Use actual per-class validation losses
+                        per_class_val_losses = self.validator.per_class_losses_val[int(class_idx)]
+                        val_count = per_class_val_losses.get('count', 1)
+                        class_row.update({
+                            "val/box_loss": float(per_class_val_losses.get("box_loss", 0.0) / val_count),
+                            "val/cls_loss": float(per_class_val_losses.get("cls_loss", 0.0) / val_count),
+                            "val/dfl_loss": float(per_class_val_losses.get("dfl_loss", 0.0) / val_count),
+                        })
+                        # Add seg_loss if it exists in per-class validation losses
+                        if "seg_loss" in per_class_val_losses:
+                            class_row["val/seg_loss"] = float(per_class_val_losses.get("seg_loss", 0.0) / val_count)
+                        elif hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
+                            class_row["val/seg_loss"] = 0.0
+                    else:
+                        # Fallback to overall validation losses if per-class validation losses not available
+                        if metrics:
+                            class_row.update({
+                                "val/box_loss": float(metrics.get("val/box_loss", 0.0)),
+                                "val/cls_loss": float(metrics.get("val/cls_loss", 0.0)),
+                                "val/dfl_loss": float(metrics.get("val/dfl_loss", 0.0)),
+                            })
+                            # Add val seg_loss only if it exists (segmentation tasks)
+                            if "val/seg_loss" in metrics:
+                                class_row["val/seg_loss"] = float(metrics.get("val/seg_loss", 0.0))
+                        else:
+                            class_row.update({
+                                "val/box_loss": 0.0,
+                                "val/cls_loss": 0.0,
+                                "val/dfl_loss": 0.0,
+                            })
+                            # Check if we have loss_names to determine if seg_loss should be included
+                            if hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
+                                class_row["val/seg_loss"] = 0.0
+                    
+                    # Add learning rates
+                    if metrics:
+                        class_row.update({
+                            "lr/pg0": float(metrics.get("lr/pg0", 0.0)),
+                            "lr/pg1": float(metrics.get("lr/pg1", 0.0)),
+                            "lr/pg2": float(metrics.get("lr/pg2", 0.0)),
+                        })
+                    else:
+                        class_row.update({
+                            "lr/pg0": 0.0,
+                            "lr/pg1": 0.0,
+                            "lr/pg2": 0.0,
+                        })
                     
                     # Try to get segmentation metrics if available (for segmentation tasks)
                     try:
@@ -859,6 +962,15 @@ class BaseTrainer:
         except Exception:
             # Silently ignore all errors to not interrupt training
             LOGGER.warning("An error occurred while saving per-class metrics, skipping.")
+
+    def _format_per_class_losses(self):
+        """Format per-class losses for inclusion in metrics."""
+        formatted_losses = {}
+        for class_id, losses in self.per_class_losses_epoch.items():
+            for loss_type, loss_value in losses.items():
+                key = f"class_{class_id}/train_{loss_type}"
+                formatted_losses[key] = float(loss_value)
+        return formatted_losses
 
     def plot_metrics(self):
         """Plot and display metrics visually."""

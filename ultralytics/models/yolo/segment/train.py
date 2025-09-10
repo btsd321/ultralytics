@@ -48,6 +48,9 @@ class SegmentationTrainer(yolo.detect.DetectionTrainer):
         if overrides is None:
             overrides = {}
         overrides["task"] = "segment"
+        # Enable per-class loss tracking by default for segmentation
+        if "per_class_loss" not in overrides:
+            overrides["per_class_loss"] = True
         super().__init__(cfg, overrides, _callbacks)
 
     def get_model(

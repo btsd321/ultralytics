@@ -304,6 +304,9 @@ class v8SegmentationLoss(v8DetectionLoss):
         """Initialize the v8SegmentationLoss class with model parameters and mask overlap setting."""
         super().__init__(model)
         self.overlap = model.args.overlap_mask
+        # Add per-class loss tracking
+        self.enable_per_class_loss = getattr(model.args, 'per_class_loss', False)
+        self.per_class_losses = {}
 
     def __call__(self, preds: Any, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
@@ -382,11 +385,108 @@ class v8SegmentationLoss(v8DetectionLoss):
             loss[1] += (proto * 0).sum() + (pred_masks * 0).sum()  # inf sums may lead to nan loss
 
         loss[0] *= self.hyp.box  # box gain
-        loss[1] *= self.hyp.box  # seg gain
+        loss[1] *= self.hyp.box  # seg gain  
         loss[2] *= self.hyp.cls  # cls gain
         loss[3] *= self.hyp.dfl  # dfl gain
 
-        return loss * batch_size, loss.detach()  # loss(box, cls, dfl)
+        # Calculate per-class losses if enabled
+        if self.enable_per_class_loss and fg_mask.sum() > 0:
+            self.calculate_per_class_losses(
+                pred_scores, target_scores, gt_labels, 
+                pred_distri, pred_bboxes, target_bboxes, 
+                fg_mask, target_gt_idx, batch_idx, masks, 
+                proto, pred_masks, imgsz, batch_size
+            )
+
+        return loss * batch_size, loss.detach()  # loss(box, seg, cls, dfl)
+
+    def calculate_per_class_losses(self, pred_scores, target_scores, gt_labels, 
+                                 pred_distri, pred_bboxes, target_bboxes,
+                                 fg_mask, target_gt_idx, batch_idx, masks,
+                                 proto, pred_masks, imgsz, batch_size):
+        """Calculate per-class losses for detailed analysis."""
+        try:
+            # Get unique classes in current batch
+            unique_classes = gt_labels.unique().long()
+            
+            for class_id in unique_classes:
+                if class_id < 0:  # Skip background/invalid classes
+                    continue
+                    
+                class_id_int = int(class_id.item())
+                
+                # Create mask for current class
+                class_mask = (gt_labels.squeeze(-1) == class_id).any(dim=0) if gt_labels.dim() > 1 else (gt_labels == class_id)
+                class_fg_mask = fg_mask & class_mask.unsqueeze(0)
+                
+                if class_fg_mask.sum() == 0:
+                    continue
+                
+                # Initialize class losses
+                if class_id_int not in self.per_class_losses:
+                    self.per_class_losses[class_id_int] = {
+                        'box_loss': 0.0, 'seg_loss': 0.0, 'cls_loss': 0.0, 'dfl_loss': 0.0, 'count': 0
+                    }
+                
+                # Calculate class-specific box and dfl losses
+                if class_fg_mask.sum() > 0:
+                    class_target_scores_sum = max(target_scores[class_fg_mask].sum(), 1)
+                    
+                    # Box loss for this class
+                    class_bbox_loss, class_dfl_loss = self.bbox_loss(
+                        pred_distri[class_fg_mask],
+                        pred_bboxes[class_fg_mask],
+                        None,  # anchor_points not needed for loss calculation
+                        target_bboxes[class_fg_mask],
+                        target_scores[class_fg_mask],
+                        class_target_scores_sum,
+                        torch.ones_like(class_fg_mask[class_fg_mask]),  # All selected are foreground
+                    )
+                    
+                    # Classification loss for this class
+                    class_cls_loss = self.bce(
+                        pred_scores[class_fg_mask], 
+                        target_scores[class_fg_mask].to(pred_scores.dtype)
+                    ).sum() / class_target_scores_sum
+                    
+                    # Segmentation loss for this class (if masks available)
+                    class_seg_loss = 0.0
+                    if masks is not None and target_gt_idx is not None:
+                        try:
+                            class_seg_loss = self.calculate_segmentation_loss(
+                                class_fg_mask, masks, target_gt_idx, target_bboxes, 
+                                batch_idx, proto, pred_masks, imgsz, self.overlap
+                            )
+                        except Exception:
+                            class_seg_loss = 0.0
+                    
+                    # Apply gains and accumulate
+                    self.per_class_losses[class_id_int]['box_loss'] += float(class_bbox_loss * self.hyp.box)
+                    self.per_class_losses[class_id_int]['seg_loss'] += float(class_seg_loss * self.hyp.seg)
+                    self.per_class_losses[class_id_int]['cls_loss'] += float(class_cls_loss * self.hyp.cls)
+                    self.per_class_losses[class_id_int]['dfl_loss'] += float(class_dfl_loss * self.hyp.dfl)
+                    self.per_class_losses[class_id_int]['count'] += 1
+                    
+        except Exception as e:
+            # Silently fail to avoid interrupting training
+            pass
+
+    def get_per_class_losses(self):
+        """Get averaged per-class losses."""
+        averaged_losses = {}
+        for class_id, losses in self.per_class_losses.items():
+            if losses['count'] > 0:
+                averaged_losses[class_id] = {
+                    'box_loss': losses['box_loss'] / losses['count'],
+                    'seg_loss': losses['seg_loss'] / losses['count'],
+                    'cls_loss': losses['cls_loss'] / losses['count'],
+                    'dfl_loss': losses['dfl_loss'] / losses['count'],
+                }
+        return averaged_losses
+
+    def reset_per_class_losses(self):
+        """Reset per-class loss accumulators."""
+        self.per_class_losses = {}
 
     @staticmethod
     def single_mask_loss(
