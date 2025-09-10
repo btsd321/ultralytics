@@ -390,19 +390,13 @@ class v8SegmentationLoss(v8DetectionLoss):
         loss[3] *= self.hyp.dfl  # dfl gain
 
         # Calculate per-class losses if enabled
-        if self.enable_per_class_loss:
-            print(f"DEBUG: enable_per_class_loss = True, fg_mask.sum() = {fg_mask.sum()}")
-            if fg_mask.sum() > 0:
-                print(f"DEBUG: Calling calculate_per_class_losses with {len(gt_labels.unique())} unique classes: {gt_labels.unique()}")
-                self.calculate_per_class_losses(
-                    pred_scores, target_scores, gt_labels, 
-                    pred_distri, pred_bboxes, target_bboxes, 
-                    fg_mask, target_gt_idx, batch_idx, masks, 
-                    proto, pred_masks, imgsz, batch_size
-                )
-                print(f"DEBUG: After calculate_per_class_losses, per_class_losses = {self.per_class_losses}")
-            else:
-                print(f"DEBUG: Skipping per-class loss calculation - no foreground objects (fg_mask.sum() = {fg_mask.sum()})")
+        if self.enable_per_class_loss and fg_mask.sum() > 0:
+            self.calculate_per_class_losses(
+                pred_scores, target_scores, gt_labels, 
+                pred_distri, pred_bboxes, target_bboxes, 
+                fg_mask, target_gt_idx, batch_idx, masks, 
+                proto, pred_masks, imgsz, batch_size
+            )
 
         return loss * batch_size, loss.detach()  # loss(box, seg, cls, dfl)
 
@@ -412,16 +406,10 @@ class v8SegmentationLoss(v8DetectionLoss):
                                  proto, pred_masks, imgsz, batch_size):
         """Calculate per-class losses for detailed analysis."""
         try:
-            print(f"DEBUG: calculate_per_class_losses called with gt_labels shape: {gt_labels.shape}")
-            print(f"DEBUG: fg_mask shape: {fg_mask.shape}, target_gt_idx shape: {target_gt_idx.shape}")
-            print(f"DEBUG: target_scores shape: {target_scores.shape}, pred_scores shape: {pred_scores.shape}")
-            
             # Get unique classes in current batch
             unique_classes = gt_labels.unique().long()
-            print(f"DEBUG: unique_classes = {unique_classes}")
             
             if fg_mask.sum() == 0:
-                print(f"DEBUG: No foreground objects, skipping per-class calculation")
                 return
             
             # Calculate per-class losses based on target assignment
@@ -498,16 +486,10 @@ class v8SegmentationLoss(v8DetectionLoss):
                     self.per_class_losses[class_id_int]['cls_loss'] += float(cls_loss * self.hyp.cls)
                     self.per_class_losses[class_id_int]['dfl_loss'] += float(dfl_loss * self.hyp.dfl)
                     self.per_class_losses[class_id_int]['count'] += 1
-                    
-                    print(f"DEBUG: Class {class_id_int} - {len(class_fg_indices)} fg points, losses: box={box_loss:.4f}, cls={cls_loss:.4f}")
             
-            print(f"DEBUG: Final per_class_losses: {self.per_class_losses}")
-            
-        except Exception as e:
-            # Print error for debugging but don't interrupt training
-            print(f"DEBUG: Exception in calculate_per_class_losses: {e}")
-            import traceback
-            print(f"DEBUG: Traceback: {traceback.format_exc()}")
+        except Exception:
+            # Silently handle errors to not interrupt training
+            pass
 
     def get_per_class_losses(self):
         """Get averaged per-class losses."""
