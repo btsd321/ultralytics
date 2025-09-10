@@ -470,6 +470,10 @@ class BaseTrainer:
                 # Collect per-class losses
                 if self.enable_per_class_loss and hasattr(self.model, 'criterion') and hasattr(self.model.criterion, 'get_per_class_losses'):
                     self.per_class_losses_epoch = self.model.criterion.get_per_class_losses()
+                    LOGGER.info(f"DEBUG: Collected per-class losses: {self.per_class_losses_epoch}")
+                    LOGGER.info(f"DEBUG: Number of classes with losses: {len(self.per_class_losses_epoch)}")
+                else:
+                    LOGGER.info(f"DEBUG: Per-class loss collection failed - enable_per_class_loss: {self.enable_per_class_loss}, has_criterion: {hasattr(self.model, 'criterion')}, has_get_method: {hasattr(self.model.criterion, 'get_per_class_losses') if hasattr(self.model, 'criterion') else False}")
                 
                 # Prepare metrics with per-class losses included
                 epoch_metrics = {**self.label_loss_items(self.tloss), **self.metrics, **self.lr}
@@ -815,6 +819,15 @@ class BaseTrainer:
                         "time": round(float(t), 4),
                         "class_id": int(class_idx),
                     }
+                    
+                    # Debug information for per-class losses
+                    if self.enable_per_class_loss:
+                        LOGGER.info(f"DEBUG: enable_per_class_loss = {self.enable_per_class_loss}")
+                        LOGGER.info(f"DEBUG: hasattr(self, 'per_class_losses_epoch') = {hasattr(self, 'per_class_losses_epoch')}")
+                        if hasattr(self, 'per_class_losses_epoch'):
+                            LOGGER.info(f"DEBUG: per_class_losses_epoch keys = {list(self.per_class_losses_epoch.keys())}")
+                            LOGGER.info(f"DEBUG: per_class_losses_epoch = {self.per_class_losses_epoch}")
+                        LOGGER.info(f"DEBUG: Looking for class_idx = {class_idx} (int: {int(class_idx)})")
                     
                     # Add per-class training losses if available, otherwise use overall losses
                     if (self.enable_per_class_loss and hasattr(self, 'per_class_losses_epoch') 
