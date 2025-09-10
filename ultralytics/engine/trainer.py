@@ -832,26 +832,9 @@ class BaseTrainer:
                         elif hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
                             class_row["train/seg_loss"] = 0.0
                     else:
-                        # Fallback to overall losses if per-class losses not available
-                        if metrics:
-                            class_row.update({
-                                "train/box_loss": float(metrics.get("train/box_loss", 0.0)),
-                                "train/cls_loss": float(metrics.get("train/cls_loss", 0.0)),
-                                "train/dfl_loss": float(metrics.get("train/dfl_loss", 0.0)),
-                            })
-                            # Add seg_loss only if it exists (segmentation tasks)
-                            if "train/seg_loss" in metrics:
-                                class_row["train/seg_loss"] = float(metrics.get("train/seg_loss", 0.0))
-                        else:
-                            class_row.update({
-                                "train/box_loss": 0.0,
-                                "train/cls_loss": 0.0,
-                                "train/dfl_loss": 0.0,
-                            })
-                            # Check if we have loss_names to determine if seg_loss should be included
-                            if hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
-                                class_row["train/seg_loss"] = 0.0
-                    
+                        LOGGER.warning(f"Per-class training losses not available for class index {class_idx}, using overall training losses.")
+                        return
+
                     # Add box metrics
                     class_row.update({
                         "metrics/precision(B)": precision,
@@ -885,25 +868,8 @@ class BaseTrainer:
                         elif hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
                             class_row["val/seg_loss"] = 0.0
                     else:
-                        # Fallback to overall validation losses if per-class validation losses not available
-                        if metrics:
-                            class_row.update({
-                                "val/box_loss": float(metrics.get("val/box_loss", 0.0)),
-                                "val/cls_loss": float(metrics.get("val/cls_loss", 0.0)),
-                                "val/dfl_loss": float(metrics.get("val/dfl_loss", 0.0)),
-                            })
-                            # Add val seg_loss only if it exists (segmentation tasks)
-                            if "val/seg_loss" in metrics:
-                                class_row["val/seg_loss"] = float(metrics.get("val/seg_loss", 0.0))
-                        else:
-                            class_row.update({
-                                "val/box_loss": 0.0,
-                                "val/cls_loss": 0.0,
-                                "val/dfl_loss": 0.0,
-                            })
-                            # Check if we have loss_names to determine if seg_loss should be included
-                            if hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
-                                class_row["val/seg_loss"] = 0.0
+                        LOGGER.warning(f"Per-class validation losses not available for class index {class_idx}, using overall validation losses.")
+                        return
                     
                     # Add learning rates
                     if metrics:
