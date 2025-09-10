@@ -233,6 +233,7 @@ CFG_BOOL_KEYS = frozenset(
         "nms",
         "profile",
         "multi_scale",
+        "per_class_loss",
     }
 )
 

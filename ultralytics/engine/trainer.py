@@ -832,8 +832,19 @@ class BaseTrainer:
                         elif hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
                             class_row["train/seg_loss"] = 0.0
                     else:
-                        LOGGER.warning(f"Per-class training losses not available for class index {class_idx}, using overall training losses.")
-                        return
+                        # Per-class training losses not available, use placeholder values
+                        # This handles cases where validation detects classes not present in training batch
+                        LOGGER.warning(f"Per-class training losses not available for class index {class_idx}, using placeholder values (1000.0).")
+                        
+                        # Use fixed placeholder values to indicate missing per-class data
+                        placeholder_losses = {
+                            "train/box_loss": 1000.0,
+                            "train/cls_loss": 1000.0,
+                            "train/dfl_loss": 1000.0,
+                            "train/seg_loss": 1000.0,
+                        }
+                        
+                        class_row.update(placeholder_losses)
 
                     # Add box metrics
                     class_row.update({
@@ -868,8 +879,19 @@ class BaseTrainer:
                         elif hasattr(self, 'loss_names') and 'seg_loss' in self.loss_names:
                             class_row["val/seg_loss"] = 0.0
                     else:
-                        LOGGER.warning(f"Per-class validation losses not available for class index {class_idx}, using overall validation losses.")
-                        return
+                        # Per-class validation losses not available, use placeholder values
+                        # This handles cases where validation detects classes not present in validation batch
+                        LOGGER.warning(f"Per-class validation losses not available for class index {class_idx}, using placeholder values (1000.0).")
+                        
+                        # Use fixed placeholder values to indicate missing per-class validation data
+                        placeholder_val_losses = {
+                            "val/box_loss": 1000.0,
+                            "val/cls_loss": 1000.0,
+                            "val/dfl_loss": 1000.0,
+                            "val/seg_loss": 1000.0,
+                        }
+                        
+                        class_row.update(placeholder_val_losses)
                     
                     # Add learning rates
                     if metrics:
