@@ -675,14 +675,20 @@ class BaseTrainer:
             # Handle DistributedDataParallel wrapped models
             actual_model = self._get_actual_model()
             
-            if hasattr(actual_model, 'criterion'):
+            # Initialize criterion if not already present
+            if not hasattr(actual_model, 'criterion') or actual_model.criterion is None:
+                if hasattr(actual_model, 'init_criterion'):
+                    actual_model.criterion = actual_model.init_criterion()
+                    LOGGER.info(f"✅ Initialized model criterion for per-class loss tracking")
+                else:
+                    LOGGER.warning(f"⚠️ Model does not have 'init_criterion' method. Per-class loss tracking will use placeholder values.")
+                    return ckpt
+            
+            if hasattr(actual_model.criterion, 'enable_per_class_loss'):
                 actual_model.criterion.enable_per_class_loss = True
                 LOGGER.info(f"✅ Per-class loss enabled on model criterion (model type: {type(self.model)})")
             else:
-                LOGGER.warning(f"⚠️ Model does not have 'criterion' attribute. Per-class loss tracking will use placeholder values.")
-                LOGGER.warning(f"   Model type: {type(self.model)}")
-                LOGGER.warning(f"   Actual model type: {type(actual_model)}")
-                LOGGER.warning(f"   Available attributes: {[attr for attr in dir(actual_model) if not attr.startswith('_')]}")
+                LOGGER.warning(f"⚠️ Model criterion does not support per-class loss tracking. Using placeholder values.")
             
         return ckpt
 
