@@ -391,8 +391,10 @@ class BaseTrainer:
             self.tloss = None
             
             # Reset per-class losses for this epoch
-            if self.enable_per_class_loss and hasattr(self.model, 'criterion') and hasattr(self.model.criterion, 'reset_per_class_losses'):
-                self.model.criterion.reset_per_class_losses()
+            actual_model = self._get_actual_model()
+            if (self.enable_per_class_loss and hasattr(actual_model, 'criterion') and 
+                hasattr(actual_model.criterion, 'reset_per_class_losses')):
+                actual_model.criterion.reset_per_class_losses()
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")
                 # Warmup
@@ -467,19 +469,24 @@ class BaseTrainer:
                     self._clear_memory(threshold=0.5)  # prevent VRAM spike
                     self.metrics, self.fitness = self.validate()
                 
-                # Collect per-class losses
-                if self.enable_per_class_loss and hasattr(self.model, 'criterion') and hasattr(self.model.criterion, 'get_per_class_losses'):
-                    self.per_class_losses_epoch = self.model.criterion.get_per_class_losses()
+                # Collect per-class losses (handle DistributedDataParallel)
+                actual_model = self._get_actual_model()
+                
+                if (self.enable_per_class_loss and hasattr(actual_model, 'criterion') and 
+                    hasattr(actual_model.criterion, 'get_per_class_losses')):
+                    self.per_class_losses_epoch = actual_model.criterion.get_per_class_losses()
                     LOGGER.info(f"✅ Collected per-class losses for {len(self.per_class_losses_epoch)} classes")
+                    if len(self.per_class_losses_epoch) > 0:
+                        LOGGER.info(f"   Classes with losses: {list(self.per_class_losses_epoch.keys())}")
                 else:
                     LOGGER.warning(f"⚠️ Per-class loss collection failed:")
                     LOGGER.warning(f"   - enable_per_class_loss: {self.enable_per_class_loss}")
-                    LOGGER.warning(f"   - model has criterion: {hasattr(self.model, 'criterion')}")
-                    if hasattr(self.model, 'criterion'):
-                        LOGGER.warning(f"   - criterion type: {type(self.model.criterion)}")
-                        LOGGER.warning(f"   - has get_per_class_losses: {hasattr(self.model.criterion, 'get_per_class_losses')}")
-                    else:
-                        LOGGER.warning(f"   - model type: {type(self.model)}")
+                    LOGGER.warning(f"   - model type: {type(self.model)}")
+                    LOGGER.warning(f"   - actual model type: {type(actual_model)}")
+                    LOGGER.warning(f"   - actual model has criterion: {hasattr(actual_model, 'criterion')}")
+                    if hasattr(actual_model, 'criterion'):
+                        LOGGER.warning(f"   - criterion type: {type(actual_model.criterion)}")
+                        LOGGER.warning(f"   - has get_per_class_losses: {hasattr(actual_model.criterion, 'get_per_class_losses')}")
                     LOGGER.warning(f"   - Will use placeholder values (1000.0) for missing per-class data")
                 
                 # Prepare metrics with per-class losses included
@@ -665,13 +672,17 @@ class BaseTrainer:
         
         # Enable per-class loss tracking if requested
         if self.enable_per_class_loss:
-            if hasattr(self.model, 'criterion'):
-                self.model.criterion.enable_per_class_loss = True
-                LOGGER.info(f"✅ Per-class loss enabled on model criterion")
+            # Handle DistributedDataParallel wrapped models
+            actual_model = self._get_actual_model()
+            
+            if hasattr(actual_model, 'criterion'):
+                actual_model.criterion.enable_per_class_loss = True
+                LOGGER.info(f"✅ Per-class loss enabled on model criterion (model type: {type(self.model)})")
             else:
                 LOGGER.warning(f"⚠️ Model does not have 'criterion' attribute. Per-class loss tracking will use placeholder values.")
                 LOGGER.warning(f"   Model type: {type(self.model)}")
-                LOGGER.warning(f"   Available attributes: {[attr for attr in dir(self.model) if not attr.startswith('_')]}")
+                LOGGER.warning(f"   Actual model type: {type(actual_model)}")
+                LOGGER.warning(f"   Available attributes: {[attr for attr in dir(actual_model) if not attr.startswith('_')]}")
             
         return ckpt
 
@@ -984,6 +995,10 @@ class BaseTrainer:
         except Exception:
             # Silently ignore all errors to not interrupt training
             LOGGER.warning("An error occurred while saving per-class metrics, skipping.")
+
+    def _get_actual_model(self):
+        """Get the actual model, handling DistributedDataParallel wrapper."""
+        return self.model.module if hasattr(self.model, 'module') else self.model
 
     def _format_per_class_losses(self):
         """Format per-class losses for inclusion in metrics."""
