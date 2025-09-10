@@ -259,6 +259,10 @@ class BaseTrainer:
         self.model = self.model.to(self.device)
         self.set_model_attributes()
 
+        # Initialize per-class loss tracking if enabled (after model attributes are set)
+        if self.enable_per_class_loss:
+            self._initialize_per_class_loss()
+
         # Freeze layers
         freeze_list = (
             self.args.freeze
@@ -670,26 +674,7 @@ class BaseTrainer:
             weights, _ = attempt_load_one_weight(self.args.pretrained)
         self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
         
-        # Enable per-class loss tracking if requested
-        if self.enable_per_class_loss:
-            # Handle DistributedDataParallel wrapped models
-            actual_model = self._get_actual_model()
-            
-            # Initialize criterion if not already present
-            if not hasattr(actual_model, 'criterion') or actual_model.criterion is None:
-                if hasattr(actual_model, 'init_criterion'):
-                    actual_model.criterion = actual_model.init_criterion()
-                    LOGGER.info(f"✅ Initialized model criterion for per-class loss tracking")
-                else:
-                    LOGGER.warning(f"⚠️ Model does not have 'init_criterion' method. Per-class loss tracking will use placeholder values.")
-                    return ckpt
-            
-            if hasattr(actual_model.criterion, 'enable_per_class_loss'):
-                actual_model.criterion.enable_per_class_loss = True
-                LOGGER.info(f"✅ Per-class loss enabled on model criterion (model type: {type(self.model)})")
-            else:
-                LOGGER.warning(f"⚠️ Model criterion does not support per-class loss tracking. Using placeholder values.")
-            
+        # Per-class loss will be initialized later when args are available
         return ckpt
 
     def optimizer_step(self):
@@ -1005,6 +990,34 @@ class BaseTrainer:
     def _get_actual_model(self):
         """Get the actual model, handling DistributedDataParallel wrapper."""
         return self.model.module if hasattr(self.model, 'module') else self.model
+    
+    def _initialize_per_class_loss(self):
+        """Initialize per-class loss tracking on the model criterion."""
+        try:
+            actual_model = self._get_actual_model()
+            LOGGER.info(f"DEBUG: Initializing per-class loss tracking (model type: {type(self.model)})")
+            
+            # Initialize criterion if not already present
+            if not hasattr(actual_model, 'criterion') or actual_model.criterion is None:
+                if hasattr(actual_model, 'init_criterion'):
+                    LOGGER.info(f"DEBUG: Calling init_criterion() to create model criterion")
+                    actual_model.criterion = actual_model.init_criterion()
+                    LOGGER.info(f"DEBUG: ✅ Model criterion initialized successfully")
+                else:
+                    LOGGER.warning(f"DEBUG: ❌ Model does not have 'init_criterion' method")
+                    return
+            
+            # Enable per-class loss tracking on the criterion
+            if hasattr(actual_model.criterion, 'enable_per_class_loss'):
+                actual_model.criterion.enable_per_class_loss = True
+                LOGGER.info(f"DEBUG: ✅ Per-class loss enabled on model criterion")
+            else:
+                LOGGER.warning(f"DEBUG: ⚠️ Model criterion does not support per-class loss tracking")
+                
+        except Exception as e:
+            LOGGER.error(f"DEBUG: Failed to initialize per-class loss tracking: {e}")
+            import traceback
+            LOGGER.error(f"DEBUG: Traceback: {traceback.format_exc()}")
 
     def _format_per_class_losses(self):
         """Format per-class losses for inclusion in metrics."""
