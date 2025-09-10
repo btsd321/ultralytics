@@ -470,10 +470,17 @@ class BaseTrainer:
                 # Collect per-class losses
                 if self.enable_per_class_loss and hasattr(self.model, 'criterion') and hasattr(self.model.criterion, 'get_per_class_losses'):
                     self.per_class_losses_epoch = self.model.criterion.get_per_class_losses()
-                    LOGGER.info(f"DEBUG: Collected per-class losses: {self.per_class_losses_epoch}")
-                    LOGGER.info(f"DEBUG: Number of classes with losses: {len(self.per_class_losses_epoch)}")
+                    LOGGER.info(f"✅ Collected per-class losses for {len(self.per_class_losses_epoch)} classes")
                 else:
-                    LOGGER.info(f"DEBUG: Per-class loss collection failed - enable_per_class_loss: {self.enable_per_class_loss}, has_criterion: {hasattr(self.model, 'criterion')}, has_get_method: {hasattr(self.model.criterion, 'get_per_class_losses') if hasattr(self.model, 'criterion') else False}")
+                    LOGGER.warning(f"⚠️ Per-class loss collection failed:")
+                    LOGGER.warning(f"   - enable_per_class_loss: {self.enable_per_class_loss}")
+                    LOGGER.warning(f"   - model has criterion: {hasattr(self.model, 'criterion')}")
+                    if hasattr(self.model, 'criterion'):
+                        LOGGER.warning(f"   - criterion type: {type(self.model.criterion)}")
+                        LOGGER.warning(f"   - has get_per_class_losses: {hasattr(self.model.criterion, 'get_per_class_losses')}")
+                    else:
+                        LOGGER.warning(f"   - model type: {type(self.model)}")
+                    LOGGER.warning(f"   - Will use placeholder values (1000.0) for missing per-class data")
                 
                 # Prepare metrics with per-class losses included
                 epoch_metrics = {**self.label_loss_items(self.tloss), **self.metrics, **self.lr}
@@ -657,8 +664,14 @@ class BaseTrainer:
         self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
         
         # Enable per-class loss tracking if requested
-        if self.enable_per_class_loss and hasattr(self.model, 'criterion'):
-            self.model.criterion.enable_per_class_loss = True
+        if self.enable_per_class_loss:
+            if hasattr(self.model, 'criterion'):
+                self.model.criterion.enable_per_class_loss = True
+                LOGGER.info(f"✅ Per-class loss enabled on model criterion")
+            else:
+                LOGGER.warning(f"⚠️ Model does not have 'criterion' attribute. Per-class loss tracking will use placeholder values.")
+                LOGGER.warning(f"   Model type: {type(self.model)}")
+                LOGGER.warning(f"   Available attributes: {[attr for attr in dir(self.model) if not attr.startswith('_')]}")
             
         return ckpt
 
