@@ -390,13 +390,19 @@ class v8SegmentationLoss(v8DetectionLoss):
         loss[3] *= self.hyp.dfl  # dfl gain
 
         # Calculate per-class losses if enabled
-        if self.enable_per_class_loss and fg_mask.sum() > 0:
-            self.calculate_per_class_losses(
-                pred_scores, target_scores, gt_labels, 
-                pred_distri, pred_bboxes, target_bboxes, 
-                fg_mask, target_gt_idx, batch_idx, masks, 
-                proto, pred_masks, imgsz, batch_size
-            )
+        if self.enable_per_class_loss:
+            print(f"DEBUG: enable_per_class_loss = True, fg_mask.sum() = {fg_mask.sum()}")
+            if fg_mask.sum() > 0:
+                print(f"DEBUG: Calling calculate_per_class_losses with {len(gt_labels.unique())} unique classes: {gt_labels.unique()}")
+                self.calculate_per_class_losses(
+                    pred_scores, target_scores, gt_labels, 
+                    pred_distri, pred_bboxes, target_bboxes, 
+                    fg_mask, target_gt_idx, batch_idx, masks, 
+                    proto, pred_masks, imgsz, batch_size
+                )
+                print(f"DEBUG: After calculate_per_class_losses, per_class_losses = {self.per_class_losses}")
+            else:
+                print(f"DEBUG: Skipping per-class loss calculation - no foreground objects (fg_mask.sum() = {fg_mask.sum()})")
 
         return loss * batch_size, loss.detach()  # loss(box, seg, cls, dfl)
 
@@ -406,8 +412,10 @@ class v8SegmentationLoss(v8DetectionLoss):
                                  proto, pred_masks, imgsz, batch_size):
         """Calculate per-class losses for detailed analysis."""
         try:
+            print(f"DEBUG: calculate_per_class_losses called with gt_labels shape: {gt_labels.shape}, unique values: {gt_labels.unique()}")
             # Get unique classes in current batch
             unique_classes = gt_labels.unique().long()
+            print(f"DEBUG: unique_classes = {unique_classes}")
             
             for class_id in unique_classes:
                 if class_id < 0:  # Skip background/invalid classes
@@ -468,8 +476,10 @@ class v8SegmentationLoss(v8DetectionLoss):
                     self.per_class_losses[class_id_int]['count'] += 1
                     
         except Exception as e:
-            # Silently fail to avoid interrupting training
-            pass
+            # Print error for debugging but don't interrupt training
+            print(f"DEBUG: Exception in calculate_per_class_losses: {e}")
+            import traceback
+            print(f"DEBUG: Traceback: {traceback.format_exc()}")
 
     def get_per_class_losses(self):
         """Get averaged per-class losses."""
