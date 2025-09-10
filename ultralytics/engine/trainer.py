@@ -719,9 +719,9 @@ class BaseTrainer:
             f.write(s + ("%.6g," * n % tuple([self.epoch + 1, t] + vals)).rstrip(",") + "\n")
         
         # Save per-class metrics to separate CSV file
-        self.save_per_class_metrics(t)
+        self.save_per_class_metrics(t, metrics)
 
-    def save_per_class_metrics(self, t):
+    def save_per_class_metrics(self, t, metrics=None):
         """Save per-class metrics to a separate CSV file."""
         try:
             # Basic safety checks - fail silently to not interrupt training
@@ -790,12 +790,46 @@ class BaseTrainer:
                         "epoch": self.epoch + 1,
                         "time": round(float(t), 4),
                         "class_id": int(class_idx),
-                        "class_name": str(class_name),
-                        "precision": precision,
-                        "recall": recall,
-                        "mAP50": ap50,
-                        "mAP50-95": ap,
+                        # Training losses (from metrics parameter)
+                        "train/box_loss": float(metrics.get("train/box_loss", 0.0)) if metrics else 0.0,
+                        "train/seg_loss": float(metrics.get("train/seg_loss", 0.0)) if metrics else 0.0,
+                        "train/cls_loss": float(metrics.get("train/cls_loss", 0.0)) if metrics else 0.0,
+                        "train/dfl_loss": float(metrics.get("train/dfl_loss", 0.0)) if metrics else 0.0,
+                        # Box metrics (B)
+                        "metrics/precision(B)": precision,
+                        "metrics/recall(B)": recall,
+                        "metrics/mAP50(B)": ap50,
+                        "metrics/mAP50-95(B)": ap,
+                        # Segmentation metrics (M) - will be 0.0 for non-segmentation tasks
+                        "metrics/precision(M)": 0.0,
+                        "metrics/recall(M)": 0.0,
+                        "metrics/mAP50(M)": 0.0,
+                        "metrics/mAP50-95(M)": 0.0,
+                        # Validation losses (from metrics parameter)
+                        "val/box_loss": float(metrics.get("val/box_loss", 0.0)) if metrics else 0.0,
+                        "val/seg_loss": float(metrics.get("val/seg_loss", 0.0)) if metrics else 0.0,
+                        "val/cls_loss": float(metrics.get("val/cls_loss", 0.0)) if metrics else 0.0,
+                        "val/dfl_loss": float(metrics.get("val/dfl_loss", 0.0)) if metrics else 0.0,
+                        # Learning rates (from metrics parameter)
+                        "lr/pg0": float(metrics.get("lr/pg0", 0.0)) if metrics else 0.0,
+                        "lr/pg1": float(metrics.get("lr/pg1", 0.0)) if metrics else 0.0,
+                        "lr/pg2": float(metrics.get("lr/pg2", 0.0)) if metrics else 0.0,
                     }
+                    
+                    # Try to get segmentation metrics if available (for segmentation tasks)
+                    try:
+                        if (hasattr(validator_metrics, 'seg') and validator_metrics.seg is not None and
+                            hasattr(validator_metrics.seg, 'class_result')):
+                            seg_precision, seg_recall, seg_ap50, seg_ap = validator_metrics.seg.class_result(i)
+                            class_row.update({
+                                "metrics/precision(M)": float(seg_precision),
+                                "metrics/recall(M)": float(seg_recall),
+                                "metrics/mAP50(M)": float(seg_ap50),
+                                "metrics/mAP50-95(M)": float(seg_ap),
+                            })
+                    except Exception:
+                        # Keep default 0.0 values if segmentation metrics not available
+                        LOGGER.warning(f"Segmentation metrics not available for class index {class_idx}, using defaults.")
                     
                     class_data.append(class_row)
                     
