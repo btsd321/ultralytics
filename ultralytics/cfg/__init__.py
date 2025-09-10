@@ -196,6 +196,7 @@ CFG_INT_KEYS = frozenset(
         "line_width",
         "nbs",
         "save_period",
+        "per_class_chunk_size",
     }
 )
 CFG_BOOL_KEYS = frozenset(
@@ -234,6 +235,8 @@ CFG_BOOL_KEYS = frozenset(
         "profile",
         "multi_scale",
         "per_class_loss",
+        "per_class_memory_efficient",
+        "skip_per_class_on_low_memory",
     }
 )
 
