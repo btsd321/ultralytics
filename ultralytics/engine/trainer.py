@@ -724,24 +724,24 @@ class BaseTrainer:
     def save_per_class_metrics(self, t):
         """Save per-class metrics to a separate CSV file."""
         try:
-            # Safety checks
-            if not (hasattr(self, 'validator') and self.validator is not None):
-                LOGGER.warning("Validator not found, skipping per-class metrics.")
+            # Basic safety checks - fail silently to not interrupt training
+            if not hasattr(self, 'validator') or self.validator is None:
+                LOGGER.warning("Validator not available, skipping per-class metrics saving.")
                 return
-            if not (hasattr(self.validator, 'metrics') and self.validator.metrics is not None):
-                LOGGER.warning("Validator metrics not found, skipping per-class metrics.")
+            if not hasattr(self.validator, 'metrics') or self.validator.metrics is None:
+                LOGGER.warning("Validator metrics not available, skipping per-class metrics saving.")
                 return
                 
             validator_metrics = self.validator.metrics
             
-            # Check if we have class-wise metrics available
-            if not (hasattr(validator_metrics, 'ap_class_index')):
-                LOGGER.warning("Validator metrics do not have class-wise metrics, skipping per-class metrics.")
+            # Get ap_class_index safely
+            if not hasattr(validator_metrics, 'ap_class_index'):
+                LOGGER.warning("Validator metrics do not have 'ap_class_index', skipping per-class metrics saving.")
                 return
             
-            ap_class_index = getattr(validator_metrics, 'ap_class_index', [])
+            ap_class_index = validator_metrics.ap_class_index
             if len(ap_class_index) == 0:
-                LOGGER.warning("Validator metrics do not have class-wise metrics, skipping per-class metrics.")
+                LOGGER.warning("No classes found in 'ap_class_index', skipping per-class metrics saving.")
                 return
                 
             # Create per-class results CSV
@@ -752,7 +752,9 @@ class BaseTrainer:
             for i in range(len(ap_class_index)):
                 try:
                     class_idx = ap_class_index[i]
-                    class_name = self.data.get("names", {}).get(class_idx, f"class_{class_idx}")
+                    
+                    # Simple class name - avoid complex data access
+                    class_name = f"class_{class_idx}"
                     
                     # Initialize with default values
                     precision = recall = ap50 = ap = 0.0
@@ -773,7 +775,7 @@ class BaseTrainer:
                                 ap = validator_metrics.ap[i]
                     except Exception:
                         # Use default values if extraction fails
-                        pass
+                        LOGGER.warning(f"Failed to extract metrics for class index {class_idx}, using defaults.")
                     
                     # Convert to float safely
                     try:
@@ -797,8 +799,9 @@ class BaseTrainer:
                     
                     class_data.append(class_row)
                     
-                except Exception as e:
-                    # Skip this class if extraction fails
+                except Exception:
+                    # Silently skip this class if extraction fails
+                    LOGGER.warning(f"Skipping class index {i} due to extraction error.")
                     continue
             
             # Write data to CSV file
@@ -815,14 +818,13 @@ class BaseTrainer:
                         for class_row in class_data:
                             vals = [str(class_row.get(k, "")) for k in class_row.keys()]
                             f.write(",".join(vals) + "\n")
-                except Exception as write_e:
-                    # If writing fails, just log and continue training
-                    LOGGER.warning(f"Failed to write per-class metrics: {write_e}")
+                except Exception:
+                    # Silently ignore file writing errors
+                    LOGGER.warning("Failed to write per-class metrics to CSV file.")
                     
-        except Exception as e:
-            # If anything fails in per-class metrics, don't break training
-            LOGGER.warning(f"Failed to save per-class metrics: {e}")
-            return
+        except Exception:
+            # Silently ignore all errors to not interrupt training
+            LOGGER.warning("An error occurred while saving per-class metrics, skipping.")
 
     def plot_metrics(self):
         """Plot and display metrics visually."""
