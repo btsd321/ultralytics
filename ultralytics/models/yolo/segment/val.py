@@ -77,7 +77,7 @@ class SegmentationValidator(DetectionValidator):
         if self.args.save_json:
             check_requirements("faster-coco-eval>=1.6.7")
         # More accurate vs faster
-        self.process = ops.process_mask_native if self.args.save_json or self.args.save_txt else ops.process_mask
+        self.process = ops.process_mask_high_quality if self.args.save_json or self.args.save_txt else ops.process_mask
 
     def get_desc(self) -> str:
         """Return a formatted description of evaluation metrics."""
@@ -114,7 +114,7 @@ class SegmentationValidator(DetectionValidator):
                 self.process(proto[i], coefficient, pred["bboxes"], shape=imgsz)
                 if len(coefficient)
                 else torch.zeros(
-                    (0, *(imgsz if self.process is ops.process_mask_native else proto.shape[2:])),
+                    (0, *(imgsz if self.process is ops.process_mask_high_quality else proto.shape[2:])),
                     dtype=torch.uint8,
                     device=pred["bboxes"].device,
                 )
@@ -140,7 +140,7 @@ class SegmentationValidator(DetectionValidator):
             masks = (masks == index).float()
         else:
             masks = batch["masks"][batch["batch_idx"] == si]
-        if nl and self.process is ops.process_mask_native:
+        if nl and self.process is ops.process_mask_high_quality:
             masks = F.interpolate(masks[None], prepared_batch["imgsz"], mode="bilinear", align_corners=False)[0]
             masks = masks.gt_(0.5)
         prepared_batch["masks"] = masks

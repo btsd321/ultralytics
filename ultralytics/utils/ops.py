@@ -554,10 +554,8 @@ def process_mask(protos, masks_in, bboxes, shape, upsample: bool = False):
 
     masks = crop_mask(masks, downsampled_bboxes)  # CHW
     if upsample:
-        # 使用双线性插值和抗锯齿来提高mask质量
-        masks = F.interpolate(masks[None], shape, mode="bilinear", align_corners=False, antialias=True)[0]  # CHW
-    return masks.gt_(0.5)  # 使用0.5阈值而不是0.0以获得更清晰的边缘
-
+        masks = F.interpolate(masks[None], shape, mode="bilinear", align_corners=False)[0]  # CHW
+    return masks.gt_(0.0)
 
 def process_mask_native(protos, masks_in, bboxes, shape):
     """
@@ -577,7 +575,71 @@ def process_mask_native(protos, masks_in, bboxes, shape):
     masks = scale_masks(masks[None], shape)[0]  # CHW
     masks = crop_mask(masks, bboxes)  # CHW
     return masks.gt_(0.0)
+def process_mask_high_quality(protos, masks_in, bboxes, shape, smoothing=True):
+    """
+    Apply masks to bounding boxes with enhanced quality processing for better edge definition.
+    
+    Args:
+        protos (torch.Tensor): Mask prototypes with shape (mask_dim, mask_h, mask_w).
+        masks_in (torch.Tensor): Mask coefficients with shape (N, mask_dim) where N is number of masks after NMS.
+        bboxes (torch.Tensor): Bounding boxes with shape (N, 4) where N is number of masks after NMS.
+        shape (tuple): Input image size as (height, width).
+        smoothing (bool): Whether to apply edge smoothing to reduce jagged edges.
 
+    Returns:
+        (torch.Tensor): Binary mask tensor with shape (H, W, N).
+    """
+    c, mh, mw = protos.shape  # CHW
+    masks = (masks_in @ protos.float().view(c, -1)).view(-1, mh, mw)
+    
+    # 使用更高质量的上采样
+    if masks.shape[-2:] != shape:
+        # 使用双三次插值获得更平滑的结果
+        masks = F.interpolate(masks[None], shape, mode="bicubic", align_corners=False, antialias=True)[0]
+    
+    masks = crop_mask(masks, bboxes)  # CHW
+    
+    if smoothing and masks.numel() > 0:
+        # 应用轻微的高斯模糊来平滑边缘
+        kernel_size = 3
+        sigma = 0.5
+        # 创建高斯核
+        x = torch.arange(kernel_size, dtype=masks.dtype, device=masks.device) - kernel_size // 2
+        gauss = torch.exp(-0.5 * (x / sigma).pow(2))
+        gauss = gauss / gauss.sum()
+        
+        # 分别在x和y方向应用1D高斯滤波
+        masks_smooth = masks.clone()
+        for i in range(masks.shape[0]):
+            # x方向
+            masks_smooth[i] = F.conv1d(
+                masks[i:i+1].view(1, shape[0], shape[1]), 
+                gauss.view(1, 1, -1), 
+                padding=kernel_size//2
+            ).view(shape[0], shape[1])
+            # y方向
+            masks_smooth[i] = F.conv1d(
+                masks_smooth[i:i+1].view(1, shape[1], shape[0]).transpose(-1, -2), 
+                gauss.view(1, 1, -1), 
+                padding=kernel_size//2
+            ).transpose(-1, -2).view(shape[0], shape[1])
+        masks = masks_smooth
+    
+    # 使用自适应阈值而不是固定阈值
+    threshold = 0.5
+    if masks.numel() > 0:
+        # 对于小物体使用更低的阈值
+        mask_areas = masks.view(masks.shape[0], -1).sum(dim=1)
+        total_area = shape[0] * shape[1]
+        small_mask_indices = mask_areas < (total_area * 0.01)  # 小于1%面积的认为是小物体
+        
+        result_masks = masks.gt_(threshold)
+        if small_mask_indices.any():
+            result_masks[small_mask_indices] = masks[small_mask_indices].gt_(0.3)  # 小物体使用更低阈值
+    else:
+        result_masks = masks.gt_(threshold)
+    
+    return result_masks.permute(1, 2, 0).contiguous()  # HWC
 
 def scale_masks(masks, shape, padding: bool = True):
     """
@@ -601,7 +663,8 @@ def scale_masks(masks, shape, padding: bool = True):
     top, left = (int(round(pad_h - 0.1)), int(round(pad_w - 0.1))) if padding else (0, 0)
     bottom = mh - int(round(pad_h + 0.1))
     right = mw - int(round(pad_w + 0.1))
-    return F.interpolate(masks[..., top:bottom, left:right], shape, mode="bilinear", align_corners=False)  # NCHW masks
+    # 使用双线性插值和抗锯齿来提高mask质量，特别是对小物体
+    return F.interpolate(masks[..., top:bottom, left:right], shape, mode="bilinear", align_corners=False, antialias=True)  # NCHW masks
 
 
 def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None, normalize: bool = False, padding: bool = True):
