@@ -65,6 +65,10 @@ classes: # (int | list[int], optional) filter results by class, i.e. classes=0, 
 retina_masks: False # (bool) use high-resolution segmentation masks
 embed: # (list[int], optional) return feature vectors/embeddings from given layers
 
+# Segmentation settings ------------------------------------------------------------------------------------------------
+mask_ratio: 1 # (float) mask resolution ratio relative to input image (for training)
+high_res_masks: False # (bool) use high-resolution masks during training for better accuracy
+
 # Visualize settings ---------------------------------------------------------------------------------------------------
 show: False # (bool) show predicted images and videos if environment allows
 save_frames: False # (bool) save predicted individual video frames

@@ -412,6 +412,17 @@ class v8SegmentationLoss(v8DetectionLoss):
             predicted masks from the prototype masks and predicted mask coefficients.
         """
         pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, 80, 80) -> (n, 80, 80)
+        
+        # 如果gt_mask和pred_mask分辨率不同，将gt_mask上采样到与pred_mask相同的分辨率
+        if gt_mask.shape[-2:] != pred_mask.shape[-2:]:
+            gt_mask = F.interpolate(
+                gt_mask.unsqueeze(1).float(), 
+                size=pred_mask.shape[-2:], 
+                mode="bilinear", 
+                align_corners=False,
+                antialias=True
+            ).squeeze(1)
+        
         loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
         return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).sum()
 

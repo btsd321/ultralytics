@@ -98,11 +98,17 @@ class Proto(nn.Module):
         self.cv1 = Conv(c1, c_, k=3)
         self.upsample = nn.ConvTranspose2d(c_, c_, 2, 2, 0, bias=True)  # nn.Upsample(scale_factor=2, mode='nearest')
         self.cv2 = Conv(c_, c_, k=3)
+        # 增加额外的上采样层以提高mask分辨率
+        self.upsample2 = nn.ConvTranspose2d(c_, c_, 2, 2, 0, bias=True)  # 额外2x上采样
         self.cv3 = Conv(c_, c2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through layers using an upsampled input image."""
-        return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+        x = self.cv1(x)
+        x = self.upsample(x)
+        x = self.cv2(x)
+        x = self.upsample2(x)  # 额外的上采样步骤，从P3/8提升到P3/4分辨率
+        return self.cv3(x)
 
 
 class HGStem(nn.Module):

@@ -554,8 +554,9 @@ def process_mask(protos, masks_in, bboxes, shape, upsample: bool = False):
 
     masks = crop_mask(masks, downsampled_bboxes)  # CHW
     if upsample:
-        masks = F.interpolate(masks[None], shape, mode="bilinear", align_corners=False)[0]  # CHW
-    return masks.gt_(0.0)
+        # 使用双线性插值和抗锯齿来提高mask质量
+        masks = F.interpolate(masks[None], shape, mode="bilinear", align_corners=False, antialias=True)[0]  # CHW
+    return masks.gt_(0.5)  # 使用0.5阈值而不是0.0以获得更清晰的边缘
 
 
 def process_mask_native(protos, masks_in, bboxes, shape):
